@@ -54,6 +54,17 @@
       </div>
     </div>
     
+    <div class="mb-4">
+      <label for="fontSearch" class="form-label">Search Fonts:</label>
+      <input
+        type="text"
+        class="form-control"
+        id="fontSearch"
+        v-model="searchTerm"
+        placeholder="Type to filter font families..."
+      >
+    </div>
+    
     <div v-if="isLoading" class="text-center my-5">
       <div class="spinner-border text-primary" role="status">
         <span class="visually-hidden">Loading...</span>
@@ -121,7 +132,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
 import axios from 'axios'
 
 interface FontFile {
@@ -153,6 +164,7 @@ const loadedSubfamilies = ref<Set<string>>(new Set()) // Track which subfamilies
 const page = ref(1)
 const fontsPerPage = 10
 const isLoading = ref(false)
+const searchTerm = ref('') // Store the search term
 
 const toggleFontDetails = (font: Font) => {
   const index = expandedFonts.value.indexOf(font.name)
@@ -208,6 +220,18 @@ const loadSubfamilyFont = (fontName: string, subfamily: Subfamily) => {
   }
 }
 
+// Filtered fonts based on search term
+const filteredFonts = computed(() => {
+  if (!searchTerm.value.trim()) {
+    return fonts.value;
+  }
+  
+  const searchLower = searchTerm.value.toLowerCase().trim();
+  return fonts.value.filter(font => 
+    font.name.toLowerCase().includes(searchLower)
+  );
+});
+
 // Function to load more fonts when scrolling
 const loadMoreFonts = () => {
   if (isLoading.value) return
@@ -215,8 +239,8 @@ const loadMoreFonts = () => {
   const startIndex = (page.value - 1) * fontsPerPage
   const endIndex = startIndex + fontsPerPage
   
-  if (startIndex < fonts.value.length) {
-    const newFonts = fonts.value.slice(startIndex, endIndex)
+  if (startIndex < filteredFonts.value.length) {
+    const newFonts = filteredFonts.value.slice(startIndex, endIndex)
     displayedFonts.value = [...displayedFonts.value, ...newFonts]
     
     // Load the default subfamily fonts for the newly added fonts
@@ -225,7 +249,7 @@ const loadMoreFonts = () => {
     })
     
     page.value++
-    console.log(`Loaded fonts ${startIndex+1}-${Math.min(endIndex, fonts.value.length)} of ${fonts.value.length}`)
+    console.log(`Loaded fonts ${startIndex+1}-${Math.min(endIndex, filteredFonts.value.length)} of ${filteredFonts.value.length}`)
   }
 }
 
@@ -346,7 +370,7 @@ const uploadFiles = async (files: FileList) => {
   const fontFiles: File[] = []
   for (let i = 0; i < files.length; i++) {
     const file = files[i]
-    if (file.name.endsWith('.ttf') || file.name.endsWith('.otf')) {
+    if (file.name.endsWith('.ttf') || file.name.endsWith('.otf') || file.name.endsWith('.zip')) {
       fontFiles.push(file)
       uploadProgress.value.push({
         filename: file.name,
@@ -452,6 +476,14 @@ const checkApiConnection = async () => {
     return false
   }
 }
+
+// Watch for changes in the search term
+watch(searchTerm, () => {
+  // Reset displayed fonts and pagination when search term changes
+  displayedFonts.value = []
+  page.value = 1
+  loadMoreFonts()
+})
 
 onMounted(async () => {
   // Check API connection first
