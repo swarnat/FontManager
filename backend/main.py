@@ -9,6 +9,8 @@ from fontTools.ttLib import TTFont, sfnt
 from fontTools.subset import Subsetter
 import pathlib
 import io
+import zipfile
+import tempfile
 
 app = FastAPI()
 
@@ -108,16 +110,14 @@ async def upload_multiple_fonts(files: list[UploadFile] = File(...)):
     
     return {"results": results}
 
-async def process_font_file(file: UploadFile):
+async def process_font_data(contents: bytes, filename: str):
+    """Process font data directly without UploadFile wrapper"""
     try:
-        # Read the file into memory
-        contents = await file.read()
-        
         # Validate the font file
         try:
             font = TTFont(io.BytesIO(contents))
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid font file format: {file.filename}")
+            raise HTTPException(status_code=400, detail=f"Invalid font file format: {filename}")
                 
         # Extract family name and subfamily
         familyName = None
@@ -137,7 +137,7 @@ async def process_font_file(file: UploadFile):
         
         # Use fallbacks if names not found in font
         if not familyName:
-            familyName = os.path.splitext(file.filename)[0]
+            familyName = os.path.splitext(filename)[0]
         if not subfamily:
             subfamily = "Regular"
             
@@ -155,17 +155,17 @@ async def process_font_file(file: UploadFile):
         if subfamily_dir.exists():
             font_files = list(subfamily_dir.glob("*.woff2")) + list(subfamily_dir.glob("*.ttf")) + list(subfamily_dir.glob("*.otf")) + list(subfamily_dir.glob("*.woff"))
             if font_files:
-                return {"message": f"Subfamily '{subfamily}' already exists. File '{file.filename}' ignored."}
+                return {"message": f"Subfamily '{subfamily}' already exists. File '{filename}' ignored."}
         
         # Create subfamily directory if it doesn't exist
         subfamily_dir.mkdir(exist_ok=True)
         
         # Use original filename for the font file
-        font_name = os.path.splitext(file.filename)[0]
+        font_name = os.path.splitext(filename)[0]
         font_dir = subfamily_dir
         
         # Save the original file
-        file_path = font_dir / file.filename
+        file_path = font_dir / filename
         with open(file_path, "wb") as buffer:
             buffer.write(contents)
             
@@ -239,7 +239,48 @@ async def process_font_file(file: UploadFile):
             except ImportError:
                 print("WOFF2 conversion requires the 'brotli' package. Please install it with 'pip install brotli'")
         
-        return {"message": f"Font {file.filename} uploaded successfully"}
+        return {"message": f"Font {filename} uploaded successfully"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def process_font_file(file: UploadFile):
+    try:
+        # Read the file into memory
+        contents = await file.read()
+        
+        # Check if it's a zip file
+        if file.filename.lower().endswith('.zip'):
+            results = []
+            # Create a temporary directory for zip extraction
+            with tempfile.TemporaryDirectory() as temp_dir:
+                zip_path = os.path.join(temp_dir, "temp.zip")
+                # Save zip file temporarily
+                with open(zip_path, "wb") as f:
+                    f.write(contents)
+                
+                # Extract and process font files
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    for zip_file in zip_ref.namelist():
+                        if zip_file.lower().endswith(('.ttf', '.otf')):
+                            # Extract and process the font file directly
+                            font_data = zip_ref.read(zip_file)
+                            try:
+                                # Process the font data directly
+                                result = await process_font_data(font_data, os.path.basename(zip_file))
+                                results.append({"filename": zip_file, "success": True, "message": result["message"]})
+                            except Exception as e:
+                                results.append({"filename": zip_file, "success": False, "message": str(e)})
+            
+            if not results:
+                raise HTTPException(status_code=400, detail="No valid font files found in zip archive")
+            
+            return {"message": f"Processed {len(results)} files from zip", "details": results}
+        
+        # If not a zip file, process it directly
+        return await process_font_data(contents, file.filename)
+
     except HTTPException as he:
         raise he
     except Exception as e:
